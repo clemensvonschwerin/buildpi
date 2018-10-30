@@ -19,60 +19,52 @@ if __name__ == "__main__":
 
     inpath = os.path.abspath(args.dockerfilepath)
     lastslash = inpath.rfind('/')
-    username = inpath[inpath[:lastslash].rfind('/'):lastslash]
+    username = inpath[inpath[:lastslash].rfind('/')+1:lastslash]
 
     print('Username: ' + username)
 
-    if os.path.exists(LOCKFILE):
+    hold_lock = False
+    try:
+        # Open file if it not exists atomically
+        os.open(LOCKFILE, os.O_CREAT | os.O_EXCL)
+        hold_lock = True
+    except FileExistsError:
         print("Build in progress, please wait until the current build is finished!")
         sys.exit(1)
 
-    else:
-        hold_lock = False
-        with open(LOCKFILE, 'rw') as fd:
-            try:
-                fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                builduser = fd.read().rstrip()
-                if (builduser == ''):
-                    fd.write(username + '\n')
-                    builduser = username
-                if (builduser == username):
-                    hold_lock = True
-                    fcntl.flock(fd, fcntl.LOCK_UN)
-                else:
-                    print("Build in progress, please wait until the current build is finished!")
-                    fcntl.flock(fd, fcntl.LOCK_UN)
-                    sys.exit(1)
-            except IOError:
-                print("Build in progress, please wait until the current build is finished!")
-                sys.exit(1)
-
-        if(hold_lock):
-            status = sp.call(['balena', 'build', inpath, '--tag', 'hss-app-' + username])
+    if(hold_lock):
+        status = sp.call(['balena', 'build', '.', '-f', inpath, '--tag', 'hss-app-' + username],
+                         cwd=inpath[:inpath.rfind('/')])
+        if status == 0:
+            status = sp.call(['balena', 'tag', 'hss-app-' + username, 'hss-app'])
             if status == 0:
-                status = sp.call(['balena', 'tag', 'hss-app-' + username, 'hss-app'])
-                if status == 0:
-                    if args.outpath:
-                        if not args.outpath.endswith('.tar'):
-                            args.outpath += '.tar'
-                        status = sp.call(['balena', 'save', 'hss-app', '-o', args.outpath])
+                if args.outpath:
+                    if not args.outpath.endswith('.tar'):
+                        args.outpath += '.tar'
+                    status = sp.call(['balena', 'save', 'hss-app', '-o', args.outpath])
+                    if status == 0:
+                        print('Successfully saved image to ' + args.outpath)
+
+                if args.repo:
+                    try:
+                        status = sp.call(['balena', 'login', args.repo, '-p', args.password, '-u', args.username])
                         if status == 0:
-                            print('Successfully saved image to ' + args.outpath)
-
-                    if args.repo:
-                        try:
-                            status = sp.call(['balena', 'login', args.repo, '-p', args.password, '-u', args.username])
+                            status = sp.call(['balena', 'tag', 'hss-app', args.repo])
                             if status == 0:
-                                status = sp.call(['balena', 'push', 'hss-app'])
-                        except Exception as ex:
-                            print("Uploading image to " + args.repo + " failed")
-                            sys.exit(1)
+                                status = sp.call(['balena', 'push', args.repo])
+                                if status == 0:
+                                    print("Successfully pushed image to " + args.repo)
+                    except Exception as ex:
+                        print("Uploading image to " + args.repo + " failed")
 
-            with open(LOCKFILE, 'rw') as fd:
-                try:
-                    fcntl.flock(fd.fileno(), fcntl.LOCK_EX)
-                    os.unlink(LOCKFILE)
-                    fcntl.flock(fd, fcntl.LOCK_UN)
-                except IOError:
-                    print("Could not delete lock file, please delete " + LOCKFILE + " manually!")
-                    sys.exit(1)
+                if status != 0:
+                    print("Command call failed with non-0 exit status, exiting!")
+
+        with open(LOCKFILE, 'w') as fd:
+            try:
+                fcntl.flock(fd.fileno(), fcntl.LOCK_EX)
+                os.unlink(LOCKFILE)
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except IOError:
+                print("Could not delete lock file, please delete " + LOCKFILE + " manually!")
+                sys.exit(1)
