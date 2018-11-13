@@ -43,7 +43,11 @@ if __name__ == "__main__":
                         args.outpath += '.tar'
                     status = sp.call(['balena', 'save', 'hss-app', '-o', args.outpath])
                     if status == 0:
+                        status = sp.call(['chmod', '777', args.outpath])
+                    if status == 0:
                         print('Successfully saved image to ' + args.outpath)
+                    else:
+                        print('Could not save image to ' + args.outpath)
 
                 if args.repo:
                     try:
